@@ -3,7 +3,7 @@ import Mesh
 import Diff
 import Solver
 
-n = 60
+n = 20
 type = "tetra"
 numFaces=0
 topStart=0 
@@ -47,13 +47,13 @@ patch1 = {"startFace": bottomStart,
 
 patch2 = {"startFace": westStart,
           "numFaces": n,
-          "type": "D",
-          "value": 1}
+          "type": "N",
+          "value": 0}
 
 patch3 = {"startFace": eastStart,
           "numFaces": n,
-          "type": "N",
-          "value": 0}
+          "type": "D",
+          "value": 1}
 
 patch4 = {"startFace": topStart,
           "numFaces": n,
@@ -64,9 +64,9 @@ boundary = [patch1, patch2, patch3, patch4]
 
 solver = Solver.Solver(mesh)
 solver.setBoundary(boundary)
-solver.setSimParameter(1, 0.01, 20)
+solver.setSimParameter(1, 0.2, 1000)
 solver.loadMatrix()
 solver.initField(lambda x,y: 0)
-solver.setVelocity(lambda x,y: [1,1])
+solver.setVelocity(lambda x,y: [-1,1])
 #solver.runSimulation()
 solver.simConvection()

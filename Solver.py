@@ -81,9 +81,14 @@ class Solver:
         conv = Conv.Conv(self._mesh)
         conv.setSimParameter(self._uFunc)
         conv.setBoundary(self._bnd)
+        conv.setScheme(3/4,3/8)
         conv.buildMatrix()
-
-        self._T = np.linalg.solve(conv._A, conv._b)
+        #print(conv._A)
+        #print(conv._b)
+        interp = Interpolate.Grad(self._mesh, self._bnd)
+        ls = LinearSolver.LinearSolver(conv._A, conv._b, None, interp, conv, self._T, 1e-06, self._numIter, 0.2)
+        ls.solveConv()
+        self._T = ls._T
         self._vtkWriter.writeScalar(self._T, 0)
 
     def setVelocity(self, uFunc):
