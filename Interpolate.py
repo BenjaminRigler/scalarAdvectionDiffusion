@@ -1,21 +1,23 @@
 import numpy as np
 
+# class to compute gradient and interpolation
 class Grad:
+    # init with mesh
     def __init__(self, mesh, bnd):
         self._bnd = bnd
         self._mesh = mesh
         self._T = None
         self._startBndId = -1
-        self._numElements = max(max(mesh._owner_list), max(mesh._neighbour_list))+1 
+        self._numElements = self._mesh._numElements
+        self._startBndId = self._mesh._bndStart
         self._Tint = None
         self._gradT = None
         self._gradTint = None
 
+    # interpolate values from cell center to cell faces
     def interpolate(self):
-        self._startBndId = min([patch["startFace"] for patch in self._bnd])
         T = self._T
         owner = self._mesh._owner_list
-        neighbour = self._mesh._neighbour_list
         Tint = []
         for i, faces in enumerate(self._mesh._faces_list[:self._startBndId]):
             cf = self._mesh._centroidFace_list[i]
@@ -29,19 +31,17 @@ class Grad:
         for patch in self._bnd:
             startId = patch["startFace"]
             endId = startId + patch["numFaces"] - 1
-            if patch["type"] == "D":
+            if patch["type"] == "fixedValue":
                 for i, face in enumerate(self._mesh._faces_list[startId:endId+1]):
                     Tint.append(patch["value"])
-            if patch["type"] == "N":
+            if patch["type"] == "fixedGradient":
                 for i, face in enumerate(self._mesh._faces_list[startId:endId+1]):
                     idFace = startId + i
-                    if owner[idFace] != -1:
-                        Tint.append(T[owner[idFace]])
-                    if neighbour[idFace] != -1:
-                        Tint.append(T[neighbour[idFace]])
+                    Tint.append(T[owner[idFace]])
         
         self._Tint = Tint
 
+    # compute gradient at cell center
     def gradientCenter(self):
         numElements = self._numElements
         owner = self._mesh._owner_list
@@ -49,10 +49,10 @@ class Grad:
         gradT = np.zeros((numElements, 2))
         Tint = self._Tint
         normal = self._mesh._faceNormal_list * self._mesh._faceNorm_list[:,np.newaxis]
+
         for i, face in enumerate(self._mesh._faces_list):
-            if owner[i] != -1:
-                gradT[owner[i]] += Tint[i] *normal[i]
-            if neighbour[i] != -1:
+            gradT[owner[i]] += Tint[i] *normal[i]
+            if i < self._mesh._bndStart:
                 gradT[neighbour[i]] -= Tint[i] *normal[i]
         
         '''
@@ -72,9 +72,11 @@ class Grad:
         
         self._gradT = gradT
 
+    # update scalar
     def updateT(self, T):
         self._T = T
 
+    # interpolate gradient from cell center to cell faces
     def gradientInterpolate(self):
         self._startBndId = min([patch["startFace"] for patch in self._bnd])
         gradT = self._gradT
@@ -93,21 +95,19 @@ class Grad:
         for patch in self._bnd:
             startId = patch["startFace"]
             endId = startId + patch["numFaces"] - 1
-            if patch["type"] == "D":
+            if patch["type"] == "fixedValue":
                 for i, face in enumerate(self._mesh._faces_list[startId:endId+1]):                
                     idFace = startId + i
-                    if owner[idFace] != -1:
-                        gradTint.append(gradT[owner[idFace]])
-                    if neighbour[idFace] != -1:
-                        gradTint.append(gradT[neighbour[idFace]])
+                    gradTint.append(gradT[owner[idFace]])
 
-            if patch["type"] == "N":
+            if patch["type"] == "fixedGradient":
                 for i, face in enumerate(self._mesh._faces_list[startId:endId+1]):
                     idFace = startId + i
                     gradTint.append(patch["value"] * self._mesh._faceNormal_list[i])
 
         self._gradTint = gradTint
 
+    # correct face values
     def updateFaceValues(self):
         owner = self._mesh._owner_list
         neighbour = self._mesh._neighbour_list

@@ -1,27 +1,25 @@
 import numpy as np
 import matplotlib.pyplot as plt
-import pandas as pd
 import copy
 
-
+## Diffusion class
 class Diff:
+    # initialize class with mesh
     def __init__(self, mesh):
         self._mesh = mesh
         self._gamma = None
-        self._bnd = None
-        self._startBndId = -1
+        self._bnd = mesh._meshBnd
+        self._startBndId = mesh._bndStart
         self._A = None
         self._b = None
         self._T = None
-        self._numElements = -1
+        self._numElements = mesh._numElements
 
+    # set diffusion coefficient
     def setSimParameter(self, gamma):
         self._gamma = gamma
 
-    def setBoundary(self, bnd):
-        self._bnd = bnd
-        self._startBndId = min([patch["startFace"] for patch in bnd])
-        
+    # build A Matrix, b vector     
     def buildMatrix(self):
         faceArea = self._mesh._faceNorm_list
         faces = self._mesh._faces_list
@@ -29,9 +27,7 @@ class Diff:
         neighbour = self._mesh._neighbour_list
         dCF = self._mesh._dCF_list
         E = self._mesh._E
-        numElements = max(max(owner), max(neighbour))+1 # consider only using max(owner) for openfoam meshes
-        self._numElements = numElements
-        geomDiff = self._mesh._geomDiff_list
+        numElements = self._numElements
         self._A = np.zeros((numElements, numElements))
         self._b = np.zeros((numElements,))
        
@@ -47,16 +43,15 @@ class Diff:
             endId = startId + patch["numFaces"] - 1
             for i, face in enumerate(faces[startId:endId+1]):
                 idFace = startId + i
-                idElement = max(owner[idFace], neighbour[idFace]) # could be changed to only use owner if only openfoam meshes are used
-                
-                if patch["type"] == "D":
-                    #d = max(geomDiff[idFace]) # could be changed to only use owner if only openfoam meshes are used
+                idElement = owner[idFace]
+                if patch["type"] == "fixedValue":
                     d = dCF[idFace]
                     self._A[idElement, idElement] += self._gamma / d * np.linalg.norm(E[idFace])
                     self._b[idElement] += self._gamma*patch["value"] / d * np.linalg.norm(E[idFace])
-                elif patch["type"] == "N":
+                elif patch["type"] == "fixedGradient":
                     self._b[idElement] += self._gamma * faceArea[i] * patch["value"]
         
+    # update b vector for deferred correction approach    
     def updateBVector(self, gradT, b):
         faces = self._mesh._faces_list
         T = self._mesh._T
@@ -68,9 +63,11 @@ class Diff:
             bnew[neighbour[i]] -= np.dot(gradT[i], T[i])
         return bnew
     
+    # do not use for general case
     def solve(self):
         self._T = np.linalg.solve(self._A, self._b)
 
+    # plot solution | not needed since vtk files are written
     def plotSolution(self):
         points = self._mesh._points_list
         data_raw = np.zeros((self._numElements, 4))
@@ -98,8 +95,5 @@ class Diff:
         plt.figure()
         plt.tricontourf(data_raw[:,0], data_raw[:,1], data_raw[:,3])
         plt.show()
-        #data = pd.DataFrame(data_raw)
-        #data.columns = ['x coord', 'y coord', 'z coord', 'scalar']
-        #data.to_csv('results.csv', index=False)
 
    

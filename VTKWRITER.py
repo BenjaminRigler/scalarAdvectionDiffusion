@@ -1,17 +1,30 @@
 import numpy as np
+import os
+import shutil
 
+# class to write results in legacy vtk format
 class VTKWRITER:
+    # initialize writer with mesh and output name
     def __init__(self, mesh, name):
         self._mesh = mesh
         self._numPoints = self._mesh._points_list.shape[1]
-        self._name = name
-        self._numElements = max(max(self._mesh._owner_list), max(self._mesh._neighbour_list))+1 # consider only using max(owner) for openfoam meshes
         
-    
+        script_dir = os.path.dirname(__file__)
+        rel_path = os.path.join(name, name)
+        self._abs_file_path = os.path.join(script_dir, rel_path)
+        self._name = name
+        if name not in os.listdir():
+            os.mkdir(os.path.join(script_dir, name))
+        else:
+            shutil.rmtree(os.path.join(script_dir, name))
+            os.mkdir(os.path.join(script_dir, name))
+        
+        self._numElements = self._mesh._numElements
+        
+    # write geometry to vtk file
     def writeGeometry(self, timestep):
-        name = self._name
         numPoints = self._numPoints
-        f = open(name+str(timestep)+".vtk", "w")
+        f = open(self._abs_file_path+"_"+str(timestep)+".vtk", "w")
         f.write("# vtk DataFile Version 3.0\n")
         f.write("Sim data\n")
         f.write("ASCII\n\n")
@@ -23,17 +36,21 @@ class VTKWRITER:
         
         center = self._mesh._centroidVolume_list
         elements = [[] for _ in range(self._numElements)]
-        for face, owner, neighbour in zip(self._mesh._faces_list, self._mesh._owner_list, self._mesh._neighbour_list):
-            if owner != -1:
-                if face[0] not in elements[owner]:
-                    elements[owner].append((face[0]))
-                if face[1] not in elements[owner]:
-                    elements[owner].append((face[1]))
-            if neighbour != -1:
-                if face[0] not in elements[neighbour]:
-                    elements[neighbour].append((face[0]))
-                if face[1] not in elements[neighbour]:
-                    elements[neighbour].append((face[1]))
+        
+        owner = self._mesh._owner_list
+        neighbour = self._mesh._neighbour_list
+        for i, face in enumerate(self._mesh._faces_list):
+            if face[0] not in elements[owner[i]]:
+                elements[owner[i]].append((face[0]))
+            if face[1] not in elements[owner[i]]:
+                elements[owner[i]].append((face[1]))
+            
+            if i < self._mesh._bndStart:
+                #print(face)
+                if face[0] not in elements[neighbour[i]]:
+                    elements[neighbour[i]].append((face[0]))
+                if face[1] not in elements[neighbour[i]]:
+                    elements[neighbour[i]].append((face[1]))
 
         f.write(f"\nCELLS {self._numElements} {np.sum([len(e) for e in elements]) + self._numElements}\n")
         for i, c in enumerate(center):
@@ -58,15 +75,20 @@ class VTKWRITER:
             elif order == 3:
                 f.write("5\n")
 
-        
         f.close()
 
-    def writeScalar(self, scalar, timestep):
-        self.writeGeometry(timestep)
-
-        f = open(self._name+str(timestep)+".vtk", "a")
+    # write header before storing simulation data (not geometry!)
+    def writeDataHeader(self, timestep):
+        f = open(self._abs_file_path+"_"+str(timestep)+".vtk", "a")
         f.write(f"\nCELL_DATA {self._numElements}\n")
-        f.write("SCALARS T double\n")
+
+    # write scalar
+    def writeScalar(self, scalar, timestep, name):
+        #self.writeGeometry(timestep)
+        
+        f = open(self._abs_file_path+"_"+str(timestep)+".vtk", "a")
+        #f.write(f"\nCELL_DATA {self._numElements}\n")
+        f.write("SCALARS " + name + " double\n")
         f.write("LOOKUP_TABLE default\n")
         for t in scalar[:-1]:
             f.write(f"{t}\n")
@@ -74,13 +96,33 @@ class VTKWRITER:
 
         f.close()
 
-    def writeVector(self, vector, timestep):
-        f = open(self._name+str(timestep)+".vtk", "a")
+    # write vector
+    def writeVector(self, vector, timestep, name):
+        f = open(self._abs_file_path+"_"+str(timestep)+".vtk", "a")
         
-        f.write("\nVECTORS gradT double\n")
+        f.write("\nVECTORS " + name + " double\n")
         for t in vector[:-1]:
             f.write(f"{t[0]} {t[1]} 0\n")
         t = vector[-1]
         f.write(f"{t[0]} {t[1]} 0")
 
         f.close()
+
+    # write series json file to import time values
+    def writeSeries(self, time):
+        f = open(self._abs_file_path + ".vtk.series", "w")
+        f.write("{\n")
+        f.write("\t\"file-series-version\" : \"1.0\",\n")
+        f.write("\t\"files\" : [\n")
+
+        files = (os.listdir(os.path.join(os.path.dirname(__file__))+"/" + self._name))
+        files = [f for f in files if ".series" not in f]
+        files = sorted(files, key = lambda x:int(x[len(self._name)+1:-4]))
+        
+        for file, t in zip(files[:-1], time[:-1]):
+            f.write("\t\t{ \"name\" : \"" + file + "\", \"time\" : " + str(round(t, 2)) + " },\n")
+
+        f.write("\t\t{ \"name\" : \"" + files[-1] + "\", \"time\" : " + str(round(time[-1], 2)) + " }\n")
+
+        f.write("\t]\n")
+        f.write("}")

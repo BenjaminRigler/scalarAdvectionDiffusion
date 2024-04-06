@@ -7,92 +7,193 @@ import LinearSolver
 import Interpolate
 import time
 import Conv
+import Sparse
 
+# class defining different solver
 class Solver:
+    # init with mesh
     def __init__(self, mesh):
         self._mesh = mesh
         self._diff = None
         self._gamma = None
-        self._bnd = None
-        self._startBndId = None
+        self._bnd = mesh._meshBnd
+        self._startBndId = mesh._bndStart
         self._timestep = None
         self._numIter = None
         self._T = None
-        self._numElements = None
+        self._numElements = mesh._numElements
         self._time = None
         self._vtkWriter = None
         self._uFunc = None
+        self._name = None
+        self._outputInterval = None
 
-    def setBoundary(self, bnd):
-        self._bnd = bnd
-        self._startBndId = min([patch["startFace"] for patch in bnd])
-
+    # set simulation related parameter
     def setSimParameter(self, gamma, timestep, numIter):
         self._gamma = gamma
         self._timestep = timestep
         self._numIter = numIter
 
-    def loadMatrix(self):
+    # build different matrices
+    def loadMatrix(self, l, k):
         self._diff = Diff.Diff(self._mesh)
         self._diff.setSimParameter(self._gamma)
-        self._diff.setBoundary(self._bnd)
         self._diff.buildMatrix()
-        self._numElements = self._diff._numElements
 
         self._time = Time.Time(self._mesh)
         self._time.setSimParameter(self._timestep)
+        self._time.buildMatrix()
 
+        if self._uFunc is not None:
+            self._conv = Conv.Conv(self._mesh)
+            self._conv.setSimParameter(self._uFunc)
+            self._conv.setScheme(l,k)
+            self._conv.buildMatrix()
 
+    # initialize scalar field
     def initField(self, Tinit):
         self._T = []
         for x in self._mesh._centroidVolume_list:
-            self._T.append(Tinit(x[0], x[1]))        
+            self._T.append(Tinit(x[0], x[1]))     
+
+    # set ouput related parameters
+    def setOutput(self, name, iter):
+        self._name = name
+        self._outputInterval = iter   
         
-    def runSimulation(self):
-        self._vtkWriter = VTKWRITER.VTKWRITER(self._mesh, "simulation")
-        self._vtkWriter.writeScalar(self._T, 0)
+    # set velocity field
+    def setVelocity(self, uFunc):
+        self._uFunc = uFunc
+
+    # set numerical related parameter
+    def setNumPar(self, rel, tol, maxIterSolver):
+        self._rel = rel
+        self._tol = tol
+        self._maxIterSolver = maxIterSolver
+
+    # diffusion solver
+    def runDiffusion(self):
+        time_list = [0]
+        time = 0
+        self._vtkWriter = VTKWRITER.VTKWRITER(self._mesh, self._name)
+        self._vtkWriter.writeGeometry(0)
+        self._vtkWriter.writeDataHeader(0)
+        self._vtkWriter.writeScalar(self._T, 0, "Phi")
+
         interp = Interpolate.Grad(self._mesh, self._bnd)
         interp.updateT(self._T)
         interp.interpolate()
         interp.gradientCenter()    
         interp.gradientInterpolate()
-        self._vtkWriter.writeVector(interp._gradT, 0)
+        self._vtkWriter.writeVector(interp._gradT, 0, "gradPhi")
+        
+        A = Sparse.SparseMatrix(self._diff._A + self._time._A)
         
         for i in range(self._numIter):
-            self._time.buildMatrix(self._T)
-            
-            A = self._diff._A + self._time._A
+            time += self._timestep
+
+            self._time.buildLoadVector(self._T)
             b = self._diff._b + self._time._b
             
-            ls = LinearSolver.LinearSolver(A,b,self._diff, interp,  self._T, 1e-6, 1000, 0.6)
+            ls = LinearSolver.LinearSolver(A, b, self._time, self._diff, interp,  None, self._T, self._tol, self._maxIterSolver, self._rel)
+            ls.solve()
+    
+            self._T = ls._T
+
+            if (i+1)%self._outputInterval == 0:
+                time_list.append(time)
+                self._vtkWriter.writeGeometry(i+1)
+                self._vtkWriter.writeDataHeader(i+1)
+                self._vtkWriter.writeScalar(self._T, i+1, "Phi")
+                interp.updateT(self._T)
+                interp.interpolate()            
+                interp.gradientCenter()    
+                interp.gradientInterpolate()
+                self._vtkWriter.writeVector(interp._gradT, i+1, "gradPhi")
+
+        self._vtkWriter.writeSeries(time_list)
+
+        
+    # convection solver
+    def runConvection(self):
+        time_list = [0]
+        time = 0
+
+        self._vtkWriter = VTKWRITER.VTKWRITER(self._mesh, self._name)
+        self._vtkWriter.writeGeometry(0)
+        self._vtkWriter.writeDataHeader(0)
+        self._vtkWriter.writeScalar(self._T, 0, "Phi")
+
+        interp = Interpolate.Grad(self._mesh, self._bnd)
+        A = Sparse.SparseMatrix(self._conv._A + self._time._A)
+        
+        for i in range(self._numIter):
+            time += self._timestep
+    
+            self._time.buildLoadVector(self._T)
+            b = self._conv._b + self._time._b
+            
+            ls = LinearSolver.LinearSolver(A, b, self._time, None, interp, self._conv, self._T, self._tol, self._maxIterSolver, self._rel)
+            ls.solve()
+            self._T = ls._T
+
+            if (i+1)%self._outputInterval == 0:
+                time_list.append(time)            
+                self._vtkWriter.writeGeometry(i+1)
+                self._vtkWriter.writeDataHeader(i+1)
+                self._vtkWriter.writeScalar(self._T, i+1, "Phi")
+
+        self._vtkWriter.writeSeries(time_list)
+            
+    # advection diffusion solver
+    def runAdvDiff(self):
+        
+        self._vtkWriter = VTKWRITER.VTKWRITER(self._mesh, self._name)
+        
+        self._vtkWriter.writeGeometry(0)
+        self._vtkWriter.writeDataHeader(0)
+        self._vtkWriter.writeScalar(self._T, 0, "Phi")
+        
+
+        interp = Interpolate.Grad(self._mesh, self._bnd)
+        interp.updateT(self._T)
+        interp.interpolate()
+        interp.gradientCenter()    
+        interp.gradientInterpolate()
+        self._vtkWriter.writeVector(interp._gradT, 0, "gradPhi")
+
+        interp = Interpolate.Grad(self._mesh, self._bnd)
+        
+        A = Sparse.SparseMatrix(self._diff._A + self._time._A + self._conv._A)
+        bb = self._diff._b + self._conv._b
+        
+        time = 0
+        time_list = [0]
+        for i in range(self._numIter):
+            
+            time += self._timestep
+
+            self._time.buildLoadVector(self._T)
+            b = bb + self._time._b
+            
+            ls = LinearSolver.LinearSolver(A, b, time, self._diff, interp, self._conv, self._T, self._tol, self._maxIterSolver, self._rel)
+
             ls.solve()
             self._T = ls._T
         
-            self._vtkWriter.writeScalar(self._T, i+1)
-            interp.updateT(self._T)
-            interp.interpolate()            
-            interp.gradientCenter()    
-            interp.gradientInterpolate()
-            self._vtkWriter.writeVector(interp._gradT, i+1)
+            if (i+1)%self._outputInterval == 0:
+                time_list.append(time)
+                self._vtkWriter.writeGeometry(i+1)
+                self._vtkWriter.writeDataHeader(i+1)
+                self._vtkWriter.writeScalar(self._T, i+1, "Phi")
 
-    def simConvection(self):
-        self._vtkWriter = VTKWRITER.VTKWRITER(self._mesh, "simulation")
-        self._vtkWriter.writeScalar(self._T, 0)
-        conv = Conv.Conv(self._mesh)
-        conv.setSimParameter(self._uFunc)
-        conv.setBoundary(self._bnd)
-        conv.setScheme(3/4,3/8)
-        conv.buildMatrix()
-        #print(conv._A)
-        #print(conv._b)
-        interp = Interpolate.Grad(self._mesh, self._bnd)
-        ls = LinearSolver.LinearSolver(conv._A, conv._b, None, interp, conv, self._T, 1e-06, self._numIter, 0.2)
-        ls.solveConv()
-        self._T = ls._T
-        self._vtkWriter.writeScalar(self._T, 0)
+                interp.updateT(self._T)
+                interp.interpolate()            
+                interp.gradientCenter()    
+                interp.gradientInterpolate()
+                self._vtkWriter.writeVector(interp._gradT, i+1, "gradPhi")
 
-    def setVelocity(self, uFunc):
-        self._uFunc = uFunc
-        
+        self._vtkWriter.writeSeries(time_list)
+
         
     

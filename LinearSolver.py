@@ -1,25 +1,31 @@
 import numpy as np
 import copy
-import Interpolate
-import time
 
+# class defining solver for linear systems of equations
+# using sparse matrices and the SOR method
 class LinearSolver:
-    def __init__(self, A, b, diff, grad, conv, Tinit, tol, maxIter, lamb_relaxation):
-        self._A = np.array(A, dtype=np.double)
+    # initialize
+    def __init__(self, A, b, time, diff, grad, conv, Tinit, tol, maxIter, lamb_relaxation):
+        self._A = A
         self._b = np.array(b, dtype=np.double)
-        self._numElements = self._A.shape[0]
+        self._numElements = len(Tinit)
         self._T = np.array(Tinit[:], dtype=np.double)
-        #self._Told = self._T[:]
         self._tol = tol
         self._maxIter = maxIter
         self._lamb_relaxation = lamb_relaxation
         self._diff = diff
         self._grad = grad
         self._conv = conv
+        self._time = time
         
-
-    def solve(self):
-        iter = 0
+    # solve system
+    def solve(self):    
+        
+        numVol = self._numElements
+        iter = 0        
+        n_1 = numVol-1
+        bcor = copy.deepcopy(self._b)
+        
         while True:
             iter += 1
 
@@ -30,45 +36,31 @@ class LinearSolver:
             self._grad.updateFaceValues()
             self._grad.gradientCenter()    
             self._grad.gradientInterpolate()
-            b = self._diff.updateBVector(self._grad._gradTint, self._b)
+
+            bcor[:] = self._b[:]
+            if self._diff != None:
+                bcor = self._diff.updateBVector(self._grad._gradTint, bcor)
+            if self._conv != None:
+                bcor = self._conv.updateB(bcor, self._T, self._grad._gradT)
             
-            for i in range(self._numElements):
-                sum = np.sum([self._A[i,j] * self._T[j] for j in range(self._numElements) if (self._A[i,j] != 0 and i != j)])
-                self._T[i] =  self._T[i] + self._lamb_relaxation*((-sum + b[i]) / self._A[i,i] - self._T[i])
-            n =np.linalg.norm(self._T - Told) 
-            if n < self._tol:
-                print("Tolerance reached")
+            for i in range(numVol-1):
+                index = self._A.rowPtr[i:i+2]
+                values = self._A.val[index[0]:index[1]]
+                colId = self._A.colInd[index[0]:index[1]]
+                self._T[i] = self._T[i] + self._lamb_relaxation * ((-np.sum(values[colId!=i] * self._T[colId[colId!=i]]) + bcor[i]) / values[colId==i][0] - self._T[i]) 
+            
+            index = self._A.rowPtr[numVol-1:numVol+1]
+            values = self._A.val[index[0]:]
+            colId = self._A.colInd[index[0]:]
+            self._T[n_1] = self._T[n_1] + self._lamb_relaxation * ((-np.sum(values[colId!=n_1] * self._T[colId[colId!=n_1]]) + bcor[n_1]) / values[colId==n_1][0] - self._T[n_1])
+             
+            norm = np.linalg.norm(self._T - Told)
+            if norm < self._tol:
+                print("Gauss-Seidel solver reached convergence")
                 break
             if iter == self._maxIter:
-                print("max Iterations reached")
+                print("Gauss-Seidel solver diverged")
                 break
             if iter%100 == 0:
-                print(f"Res: {n}")
-
-    def solveConv(self):
+                print(f"GS: Res = {norm}")
         
-        iter = 0
-        while True:
-            iter += 1
-
-            Told = copy.deepcopy(self._T)
-            self._grad.updateT(Told)
-            self._grad.interpolate()
-            self._grad.gradientCenter()
-            b = self._conv.updateB(self._b, self._T, self._grad._gradT)
-            #print(b)
-            #b = copy.deepcopy(self._b)
-            for i in range(self._numElements):
-                sum = np.sum([self._A[i,j] * self._T[j] for j in range(self._numElements) if (self._A[i,j] != 0 and i != j)])
-                self._T[i] =  self._T[i] + self._lamb_relaxation*((-sum + b[i]) / self._A[i,i] - self._T[i])
-            
-            n = np.linalg.norm(self._T - Told)
-            if  n < self._tol:
-                print("Tolerance reached")
-                break
-            if iter == self._maxIter:
-                print("max Iterations reached")
-                break
-            if iter%100 == 0:
-                print(f"Res: {n}")
-    
